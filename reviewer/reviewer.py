@@ -5,6 +5,7 @@ import logging
 import os
 
 from . import github_client, llm
+from . import cost as cost_mod
 from . import state as state_mod
 from .chunker import chunk_diff, estimate_tokens
 from .config import SEVERITY_RANK
@@ -180,10 +181,15 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
     )
 
     dimensions = enabled_dimensions(config)
+    tracker = cost_mod.CostTracker(config.llm_model, config.pricing)
     findings = []
     skipped_chunks = 0
     for i, chunk in enumerate(chunks, 1):
         log.info("Reviewing chunk %d/%d: %s", i, len(chunks), chunk["path"])
+        messages = llm.build_messages(pr, chunk["text"], dimensions)
+        prompt_tokens = cost_mod.count_tokens(
+            "\n".join(m["content"] for m in messages), config.llm_model
+        )
         raw = llm.review_chunk(
             config.llm_base_url,
             config.llm_api_key,
@@ -192,6 +198,7 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
             chunk["text"],
             enabled_categories=dimensions,
         )
+        tracker.record(prompt_tokens, cost_mod.count_tokens(raw or "", config.llm_model))
         try:
             findings.extend(parse_findings(raw))
         except ParseError:
@@ -204,6 +211,7 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
                 chunk["text"],
                 enabled_categories=dimensions,
             )
+            tracker.record(0, cost_mod.count_tokens(raw or "", config.llm_model))
             try:
                 findings.extend(parse_findings(raw))
             except ParseError:
@@ -211,11 +219,13 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
                 skipped_chunks += 1
 
     findings = apply_finding_filters(findings, config)
+    cost_line = tracker.summary_line()
+    log.info(cost_line)
 
     comments = [
         {"path": f["path"], "line": f["line"], "body": format_comment(f)} for f in findings
     ]
-    summary = build_summary(findings, skipped_chunks)
+    summary = build_summary(findings, skipped_chunks) + "\n" + cost_line
 
     posted = False
     if not dry_run:
@@ -236,6 +246,8 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
         "summary": summary,
         "posted": posted,
         "skipped_chunks": skipped_chunks,
+        "cost": tracker.as_dict(),
+        "cost_line": cost_line,
     }
 
 
