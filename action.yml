@@ -27,6 +27,18 @@ inputs:
     description: "If true, log the review instead of posting it on the PR."
     required: false
     default: "false"
+  config-file:
+    description: "Path to a .pr-reviewer.yaml config file. Leave empty to auto-load .pr-reviewer.yaml from the repo root when present."
+    required: false
+    default: ""
+  state-path:
+    description: "Path to the incremental-review state file."
+    required: false
+    default: ".pr-reviewer-state.json"
+  full:
+    description: "If true, force a full re-review, ignoring incremental state."
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -51,5 +63,12 @@ runs:
         if [ "${{ inputs.dry-run }}" = "true" ]; then
           DRY_RUN_FLAG="--dry-run"
         fi
-        python -m reviewer --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}" $DRY_RUN_FLAG
+        EXTRA_FLAGS=""
+        if [ -n "${{ inputs.config-file }}" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --config ${{ inputs.config-file }}"
+        fi
+        if [ "${{ inputs.full }}" = "true" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --full"
+        fi
+        python -m reviewer --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}" --state-path "${{ inputs.state-path }}" $DRY_RUN_FLAG $EXTRA_FLAGS
       working-directory: ${{ github.action_path }}

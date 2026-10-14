@@ -112,3 +112,11 @@ def test_action_yml_is_valid_and_wired():
     # The runner must target the PR from the triggering event.
     assert "github.event.pull_request.number" in run_step["run"]
     assert "github.repository" in run_step["run"]
+
+    # New feature inputs are wired into the CLI invocation.
+    assert inputs["config-file"]["required"] is False
+    assert inputs["state-path"]["default"] == ".pr-reviewer-state.json"
+    assert inputs["full"]["default"] == "false"
+    assert "--state-path" in run_step["run"]
+    assert "--config" in run_step["run"]
+    assert "--full" in run_step["run"]
