@@ -1,0 +1,6 @@
+# Runtime dependencies (pinned)
+requests==2.32.3
+pyyaml==6.0.2
+
+# Dev / test dependencies (pinned)
+pytest==8.3.4
