@@ -9,6 +9,7 @@ from .config import Config, ConfigError
 from .github_client import GitHubError
 from .llm import LLMError
 from .reviewer import review_pull_request
+from .state import DEFAULT_STATE_PATH
 
 
 def build_arg_parser():
@@ -33,6 +34,16 @@ def build_arg_parser():
         type=int,
         default=None,
         help="Override MAX_CHUNK_TOKENS from the environment",
+    )
+    parser.add_argument(
+        "--state-path",
+        default=DEFAULT_STATE_PATH,
+        help=f"Path to the incremental-review state file (default: {DEFAULT_STATE_PATH})",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Force a full re-review, ignoring recorded incremental state",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     return parser
@@ -69,7 +80,14 @@ def main(argv=None):
         config.max_chunk_tokens = args.max_chunk_tokens
 
     try:
-        result = review_pull_request(config, args.repo, args.pr, dry_run=args.dry_run)
+        result = review_pull_request(
+            config,
+            args.repo,
+            args.pr,
+            dry_run=args.dry_run,
+            state_path=args.state_path,
+            full=args.full,
+        )
     except (GitHubError, LLMError, ConfigError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

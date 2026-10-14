@@ -54,6 +54,8 @@ def mock_http(monkeypatch):
     posted = {}
 
     def fake_get(url, **kwargs):
+        if url.endswith("/pulls/123/commits"):
+            return FakeResponse(json_data=[{"sha": "abc123"}])
         if "pulls/123" in url and kwargs.get("headers", {}).get("Accept") == "application/vnd.github.diff":
             return FakeResponse(text=DIFF)
         if "pulls/123" in url:
@@ -79,8 +81,9 @@ def mock_http(monkeypatch):
     return posted
 
 
-def test_full_pipeline_posts_inline_review(mock_http):
-    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=False)
+def test_full_pipeline_posts_inline_review(mock_http, tmp_path):
+    state_path = str(tmp_path / "state.json")
+    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=False, state_path=state_path)
     assert result["posted"] is True
     assert len(result["findings"]) == 1
     assert len(result["comments"]) == 1
@@ -98,17 +101,20 @@ def test_full_pipeline_posts_inline_review(mock_http):
     assert "octocat/hello-world/pulls/123/reviews" in mock_http["url"]
 
 
-def test_dry_run_does_not_post(mock_http):
-    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=True)
+def test_dry_run_does_not_post(mock_http, tmp_path):
+    state_path = str(tmp_path / "state.json")
+    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=True, state_path=state_path)
     assert result["posted"] is False
     assert "payload" not in mock_http  # no review POST happened
     assert len(result["comments"]) == 1
 
 
-def test_malformed_llm_json_retried_once_then_skipped(monkeypatch):
+def test_malformed_llm_json_retried_once_then_skipped(monkeypatch, tmp_path):
     calls = {"n": 0}
 
     def fake_get(url, **kwargs):
+        if url.endswith("/pulls/123/commits"):
+            return FakeResponse(json_data=[{"sha": "x"}])
         if kwargs.get("headers", {}).get("Accept") == "application/vnd.github.diff":
             return FakeResponse(text=DIFF)
         return FakeResponse(
@@ -126,14 +132,17 @@ def test_malformed_llm_json_retried_once_then_skipped(monkeypatch):
     monkeypatch.setattr(requests, "get", fake_get)
     monkeypatch.setattr(requests, "post", fake_post)
 
-    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=True)
+    state_path = str(tmp_path / "state.json")
+    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=True, state_path=state_path)
     assert calls["n"] == 2  # one retry, then give up
     assert result["findings"] == []
     assert result["skipped_chunks"] == 1
 
 
-def test_empty_diff_returns_early(monkeypatch):
+def test_empty_diff_returns_early(monkeypatch, tmp_path):
     def fake_get(url, **kwargs):
+        if url.endswith("/pulls/123/commits"):
+            return FakeResponse(json_data=[{"sha": "x"}])
         if kwargs.get("headers", {}).get("Accept") == "application/vnd.github.diff":
             return FakeResponse(text="")
         return FakeResponse(
@@ -149,7 +158,8 @@ def test_empty_diff_returns_early(monkeypatch):
     monkeypatch.setattr(requests, "get", fake_get)
     monkeypatch.setattr(requests, "post", fake_post)
 
-    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=False)
+    state_path = str(tmp_path / "state.json")
+    result = review_pull_request(make_config(), "octocat/hello-world", 123, dry_run=False, state_path=state_path)
     assert result["findings"] == []
     assert result["posted"] is False
     assert posted == []

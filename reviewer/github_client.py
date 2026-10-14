@@ -58,6 +58,47 @@ def get_diff(token, repo, pr_number):
     return resp.text or ""
 
 
+def list_pr_commits(token, repo, pr_number):
+    """List commit SHAs on a PR, oldest first."""
+    url = f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}/commits"
+    try:
+        resp = requests.get(url, headers=_headers(token), timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise GitHubError(f"Failed to list commits for PR #{pr_number}: {exc}") from exc
+    if resp.status_code != 200:
+        raise GitHubError(
+            f"GitHub API returned {resp.status_code} listing commits for PR #{pr_number}: {resp.text[:200]}"
+        )
+    try:
+        return [c["sha"] for c in resp.json()]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise GitHubError(f"Could not parse commit list for PR #{pr_number}: {exc}") from exc
+
+
+def get_compare_diff(token, repo, base_sha, head_sha):
+    """Unified diff of the commits after ``base_sha`` up to ``head_sha``.
+
+    Used for incremental reviews. Raises GitHubError when the compare fails
+    (e.g. a force-push made ``base_sha`` unknown); the caller can fall back
+    to the full PR diff.
+    """
+    url = f"{GITHUB_API}/repos/{repo}/compare/{base_sha}...{head_sha}"
+    headers = _headers(token)
+    headers["Accept"] = "application/vnd.github.diff"
+    try:
+        resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise GitHubError(
+            f"Failed to compare {base_sha[:7]}...{head_sha[:7]}: {exc}"
+        ) from exc
+    if resp.status_code != 200:
+        raise GitHubError(
+            f"GitHub API returned {resp.status_code} comparing "
+            f"{base_sha[:7]}...{head_sha[:7]}: {resp.text[:200]}"
+        )
+    return resp.text or ""
+
+
 def post_review(token, repo, pr_number, comments, summary_body, event="COMMENT"):
     """Post an inline review (one comment per finding) on a pull request.
 
