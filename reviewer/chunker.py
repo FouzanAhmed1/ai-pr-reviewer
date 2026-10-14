@@ -81,29 +81,32 @@ def split_hunks(file_diff):
     return hunks
 
 
-def chunk_diff(diff_text, max_chunk_tokens):
-    """Split a diff into chunks, each estimated under ``max_chunk_tokens``.
+def chunk_diff(diff_text, max_chunk_tokens, budget_for=None):
+    """Split a diff into chunks, each estimated under its file's token budget.
 
     Returns a list of dicts: {"path": str, "text": str, "line_offset": int}
     where ``line_offset`` is the new-file line number of the first line of
-    the chunk's first hunk.
+    the chunk's first hunk. ``budget_for`` is an optional callable mapping a
+    file path to its own max token budget (used for per-language overrides);
+    files fall back to ``max_chunk_tokens`` when it is None.
     """
     chunks = []
     for path, file_diff in split_files(diff_text):
-        if estimate_tokens(file_diff) <= max_chunk_tokens:
+        budget = budget_for(path) if budget_for else max_chunk_tokens
+        if estimate_tokens(file_diff) <= budget:
             chunks.append({"path": path, "text": file_diff, "line_offset": 0})
             continue
         for hunk_text, start_line in split_hunks(file_diff):
             # split_hunks already attaches the file header to the first hunk,
             # so the budget check below sees the real chunk size.
-            if estimate_tokens(hunk_text) <= max_chunk_tokens:
+            if estimate_tokens(hunk_text) <= budget:
                 chunks.append({"path": path, "text": hunk_text, "line_offset": start_line})
                 continue
             # Even a single hunk is over budget: greedily pack lines so every
             # piece stays under the budget when measured, not estimated.
             piece_lines = []
             for line in hunk_text.splitlines():
-                if piece_lines and estimate_tokens("\n".join(piece_lines) + "\n" + line) > max_chunk_tokens:
+                if piece_lines and estimate_tokens("\n".join(piece_lines) + "\n" + line) > budget:
                     chunks.append(
                         {
                             "path": path,

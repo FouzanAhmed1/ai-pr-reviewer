@@ -36,6 +36,11 @@ def build_arg_parser():
         help="Override MAX_CHUNK_TOKENS from the environment",
     )
     parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to a .pr-reviewer.yaml config file (auto-loaded from the repo root when present)",
+    )
+    parser.add_argument(
         "--state-path",
         default=DEFAULT_STATE_PATH,
         help=f"Path to the incremental-review state file (default: {DEFAULT_STATE_PATH})",
@@ -73,7 +78,7 @@ def main(argv=None):
     )
 
     try:
-        config = Config.from_env()
+        config = Config.from_env_and_file(args.config)
     except ConfigError as exc:
         parser.error(str(exc))
     if args.max_chunk_tokens is not None:

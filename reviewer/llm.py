@@ -7,17 +7,43 @@ skipped with a warning.
 
 import requests
 
+from .parser import CATEGORIES
+
 REQUEST_TIMEOUT = 120
 
-SYSTEM_PROMPT = """\
+DIMENSION_TEXT = {
+    "correctness": (
+        "Correctness / bugs: wrong logic, off-by-one errors, broken edge cases, "
+        "bad error handling"
+    ),
+    "security": (
+        "Security: injection, auth/authz flaws, secrets in code, unsafe "
+        "deserialization, SSRF, XSS, command injection"
+    ),
+    "performance": (
+        "Performance: obvious complexity blowups, N+1 patterns, unbounded loops, "
+        "missing pagination, hot-path allocations"
+    ),
+    "style": (
+        "Code style: naming, dead code, duplication, readability problems worth fixing"
+    ),
+}
+
+
+def build_system_prompt(enabled_categories=None):
+    """Build the reviewer system prompt covering only enabled dimensions.
+
+    ``enabled_categories`` is a subset of ("correctness", "security",
+    "performance", "style"); None means all dimensions.
+    """
+    enabled = [c for c in CATEGORIES if enabled_categories is None or c in enabled_categories]
+    dimensions = "\n".join(f"- {DIMENSION_TEXT[c]}" for c in enabled)
+    return f"""\
 You are a senior software engineer reviewing a pull request diff.
 Review the diff chunks you receive and find issues worth flagging.
 
 Cover these dimensions:
-- Correctness / bugs: wrong logic, off-by-one errors, broken edge cases, bad error handling
-- Security: injection, auth/authz flaws, secrets in code, unsafe deserialization, SSRF, XSS, command injection
-- Performance: obvious complexity blowups, N+1 patterns, unbounded loops, missing pagination, hot-path allocations
-- Code style: naming, dead code, duplication, readability problems worth fixing
+{dimensions}
 
 Rules:
 - Only flag issues you are reasonably confident about. No speculation, no "consider" filler.
@@ -33,11 +59,15 @@ Rules:
 """
 
 
+#: Default system prompt with all review dimensions enabled.
+SYSTEM_PROMPT = build_system_prompt()
+
+
 class LLMError(Exception):
     """Raised when the LLM endpoint call fails."""
 
 
-def build_messages(pr_context, chunk_text):
+def build_messages(pr_context, chunk_text, enabled_categories=None):
     """Build the chat messages for one diff chunk."""
     user_content = (
         f"Pull request: {pr_context.get('title', '')}\n"
@@ -45,17 +75,17 @@ def build_messages(pr_context, chunk_text):
         f"Diff chunk:\n```diff\n{chunk_text}\n```"
     )
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt(enabled_categories)},
         {"role": "user", "content": user_content},
     ]
 
 
-def review_chunk(base_url, api_key, model, pr_context, chunk_text):
+def review_chunk(base_url, api_key, model, pr_context, chunk_text, enabled_categories=None):
     """Send one diff chunk to the LLM and return the raw response text."""
     url = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
         "model": model,
-        "messages": build_messages(pr_context, chunk_text),
+        "messages": build_messages(pr_context, chunk_text, enabled_categories),
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
     }

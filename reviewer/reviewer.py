@@ -1,13 +1,82 @@
 """Orchestrates the full review: fetch -> chunk -> review -> post."""
 
+import fnmatch
 import logging
+import os
 
 from . import github_client, llm
 from . import state as state_mod
 from .chunker import chunk_diff, estimate_tokens
-from .parser import ParseError, build_summary, format_comment, parse_findings
+from .config import SEVERITY_RANK
+from .parser import CATEGORIES, ParseError, build_summary, format_comment, parse_findings
 
 log = logging.getLogger(__name__)
+
+#: File extension -> language key used by the ``per_language`` config section.
+EXTENSION_LANGUAGES = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".rb": "ruby",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".php": "php",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".hpp": "cpp",
+    ".sh": "shell",
+}
+
+
+def is_ignored(path, ignore_patterns):
+    """True when ``path`` matches any glob in ``ignore_patterns``."""
+    return any(fnmatch.fnmatch(path, pattern) for pattern in ignore_patterns)
+
+
+def language_for_path(path):
+    """Language key for a file path, or None when unknown."""
+    return EXTENSION_LANGUAGES.get(os.path.splitext(path)[1].lower())
+
+
+def make_budget_for(config):
+    """Build the per-file chunk-budget callable from the config.
+
+    Languages listed under ``per_language`` with a ``max_chunk_tokens`` get
+    their own budget; every other file uses ``config.max_chunk_tokens``.
+    """
+    overrides = {
+        lang: opts.get("max_chunk_tokens")
+        for lang, opts in config.per_language.items()
+    }
+
+    def budget_for(path):
+        override = overrides.get(language_for_path(path))
+        return override or config.max_chunk_tokens
+
+    return budget_for
+
+
+def apply_finding_filters(findings, config):
+    """Drop findings in disabled dimensions or below the severity threshold."""
+    enabled = {c for c, on in config.review_rules.items() if on}
+    filtered = [f for f in findings if f["category"] in enabled]
+    if config.severity_threshold:
+        min_rank = SEVERITY_RANK[config.severity_threshold]
+        filtered = [f for f in filtered if SEVERITY_RANK[f["severity"]] >= min_rank]
+    return filtered
+
+
+def enabled_dimensions(config):
+    """Review dimensions enabled by the config, in canonical order."""
+    return [c for c in CATEGORIES if config.review_rules.get(c, True)]
 
 
 def _resolve_diff(token, repo, pr_number, state, full):
@@ -100,13 +169,17 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
         summary = f"AI review: PR #{pr_number} has an empty diff; nothing to review."
         return {**base_result, "summary": summary}
 
-    chunks = chunk_diff(diff, config.max_chunk_tokens)
+    chunks = chunk_diff(diff, config.max_chunk_tokens, make_budget_for(config))
+    chunks = [c for c in chunks if not is_ignored(c["path"], config.ignore_paths)]
+    if config.ignore_paths and not chunks:
+        log.info("All diff chunks matched ignore_paths; nothing to review.")
     log.info(
         "Diff split into %d chunk(s) (~%d estimated tokens total).",
         len(chunks),
         estimate_tokens(diff),
     )
 
+    dimensions = enabled_dimensions(config)
     findings = []
     skipped_chunks = 0
     for i, chunk in enumerate(chunks, 1):
@@ -117,6 +190,7 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
             config.llm_model,
             pr,
             chunk["text"],
+            enabled_categories=dimensions,
         )
         try:
             findings.extend(parse_findings(raw))
@@ -128,12 +202,15 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
                 config.llm_model,
                 pr,
                 chunk["text"],
+                enabled_categories=dimensions,
             )
             try:
                 findings.extend(parse_findings(raw))
             except ParseError:
                 log.warning("Chunk %d/%d still malformed; skipping.", i, len(chunks))
                 skipped_chunks += 1
+
+    findings = apply_finding_filters(findings, config)
 
     comments = [
         {"path": f["path"], "line": f["line"], "body": format_comment(f)} for f in findings
