@@ -56,6 +56,8 @@ def mock_http(monkeypatch):
     def fake_get(url, **kwargs):
         if url.endswith("/pulls/123/commits"):
             return FakeResponse(json_data=[{"sha": "abc123"}])
+        if url.endswith("/issues/123/comments"):
+            return FakeResponse(json_data=[])
         if "pulls/123" in url and kwargs.get("headers", {}).get("Accept") == "application/vnd.github.diff":
             return FakeResponse(text=DIFF)
         if "pulls/123" in url:
@@ -74,6 +76,9 @@ def mock_http(monkeypatch):
             posted["payload"] = kwargs.get("json")
             posted["url"] = url
             return FakeResponse(status_code=201, json_data={"id": 1})
+        if url.endswith("/issues/123/comments"):
+            posted["summary_comment"] = kwargs.get("json")
+            return FakeResponse(status_code=201, json_data={"id": 99})
         return FakeResponse(status_code=404, text="not found")
 
     monkeypatch.setattr(requests, "get", fake_get)

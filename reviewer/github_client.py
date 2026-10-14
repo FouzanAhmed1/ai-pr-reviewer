@@ -2,6 +2,8 @@
 
 import requests
 
+from .summary import SUMMARY_MARKER
+
 GITHUB_API = "https://api.github.com"
 REQUEST_TIMEOUT = 30
 
@@ -122,3 +124,60 @@ def post_review(token, repo, pr_number, comments, summary_body, event="COMMENT")
             f"GitHub API returned {resp.status_code} posting review on PR #{pr_number}: {resp.text[:300]}"
         )
     return resp.json()
+
+
+def list_issue_comments(token, repo, issue_number):
+    """List comments on a PR (PRs are issues under the hood): [{id, body}]."""
+    url = f"{GITHUB_API}/repos/{repo}/issues/{issue_number}/comments"
+    try:
+        resp = requests.get(url, headers=_headers(token), timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise GitHubError(f"Failed to list comments on PR #{issue_number}: {exc}") from exc
+    if resp.status_code != 200:
+        raise GitHubError(
+            f"GitHub API returned {resp.status_code} listing comments on PR #{issue_number}: {resp.text[:200]}"
+        )
+    try:
+        return [{"id": c["id"], "body": c.get("body") or ""} for c in resp.json()]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise GitHubError(f"Could not parse comments on PR #{issue_number}: {exc}") from exc
+
+
+def create_issue_comment(token, repo, issue_number, body):
+    """Post a new top-level comment on a PR."""
+    url = f"{GITHUB_API}/repos/{repo}/issues/{issue_number}/comments"
+    try:
+        resp = requests.post(url, headers=_headers(token), json={"body": body}, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise GitHubError(f"Failed to comment on PR #{issue_number}: {exc}") from exc
+    if resp.status_code != 201:
+        raise GitHubError(
+            f"GitHub API returned {resp.status_code} commenting on PR #{issue_number}: {resp.text[:300]}"
+        )
+    return resp.json()
+
+
+def update_issue_comment(token, repo, comment_id, body):
+    """Edit an existing top-level comment (used to update the summary)."""
+    url = f"{GITHUB_API}/repos/{repo}/issues/comments/{comment_id}"
+    try:
+        resp = requests.patch(url, headers=_headers(token), json={"body": body}, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise GitHubError(f"Failed to update comment {comment_id}: {exc}") from exc
+    if resp.status_code != 200:
+        raise GitHubError(
+            f"GitHub API returned {resp.status_code} updating comment {comment_id}: {resp.text[:300]}"
+        )
+    return resp.json()
+
+
+def post_or_update_summary_comment(token, repo, pr_number, body):
+    """Post the summary comment, or update the existing one in place.
+
+    The existing summary is found by its HTML marker, so re-runs never
+    duplicate it.
+    """
+    for comment in list_issue_comments(token, repo, pr_number):
+        if SUMMARY_MARKER in comment["body"]:
+            return update_issue_comment(token, repo, comment["id"], body)
+    return create_issue_comment(token, repo, pr_number, body)

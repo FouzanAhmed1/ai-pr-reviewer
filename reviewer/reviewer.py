@@ -7,6 +7,7 @@ import os
 from . import github_client, llm
 from . import cost as cost_mod
 from . import state as state_mod
+from . import summary as summary_mod
 from .chunker import chunk_diff, estimate_tokens
 from .config import SEVERITY_RANK
 from .parser import CATEGORIES, ParseError, build_summary, format_comment, parse_findings
@@ -226,11 +227,22 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
         {"path": f["path"], "line": f["line"], "body": format_comment(f)} for f in findings
     ]
     summary = build_summary(findings, skipped_chunks) + "\n" + cost_line
+    summary_comment = summary_mod.build_summary_comment(
+        files_reviewed=len({c["path"] for c in chunks}),
+        findings=findings,
+        cost=tracker.as_dict(),
+        dimensions=dimensions,
+        incremental=incremental,
+        commits_reviewed=commits_reviewed,
+    )
 
     posted = False
     if not dry_run:
         github_client.post_review(
             config.github_token, repo, pr_number, comments, summary_body=summary
+        )
+        github_client.post_or_update_summary_comment(
+            config.github_token, repo, pr_number, summary_comment
         )
         posted = True
         log.info("Posted review on PR #%s with %d inline comment(s).", pr_number, len(comments))
@@ -248,6 +260,8 @@ def review_pull_request(config, repo, pr_number, dry_run=False,
         "skipped_chunks": skipped_chunks,
         "cost": tracker.as_dict(),
         "cost_line": cost_line,
+        "summary_comment": summary_comment,
+        "files_reviewed": len({c["path"] for c in chunks}),
     }
 
 
