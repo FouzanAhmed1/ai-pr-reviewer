@@ -1,0 +1,55 @@
+name: "AI PR Reviewer"
+description: "Reviews pull request diffs with an LLM and posts inline review comments."
+branding:
+  icon: "git-pull-request"
+  color: "blue"
+
+inputs:
+  github-token:
+    description: "GitHub token used to fetch the diff and post the review."
+    required: true
+  llm-api-key:
+    description: "API key for the OpenAI-compatible LLM endpoint."
+    required: true
+  llm-base-url:
+    description: "Base URL of the OpenAI-compatible chat completions endpoint."
+    required: false
+    default: "https://api.openai.com/v1"
+  llm-model:
+    description: "Model name to send to the chat completions endpoint."
+    required: false
+    default: "gpt-4o-mini"
+  max-chunk-tokens:
+    description: "Max estimated tokens per diff chunk sent to the LLM."
+    required: false
+    default: "4000"
+  dry-run:
+    description: "If true, log the review instead of posting it on the PR."
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install ai-pr-reviewer
+      shell: bash
+      run: pip install requests pyyaml
+    - name: Run AI review
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        MAX_CHUNK_TOKENS: ${{ inputs.max-chunk-tokens }}
+      run: |
+        DRY_RUN_FLAG=""
+        if [ "${{ inputs.dry-run }}" = "true" ]; then
+          DRY_RUN_FLAG="--dry-run"
+        fi
+        python -m reviewer --repo "${{ github.repository }}" --pr "${{ github.event.pull_request.number }}" $DRY_RUN_FLAG
+      working-directory: ${{ github.action_path }}
